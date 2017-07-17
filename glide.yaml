@@ -1,0 +1,5 @@
+package: ginmm
+import:
+- package: github.com/gin-gonic/gin
+  version: ^1.1.4
+- package: github.com/go-errors/errors
