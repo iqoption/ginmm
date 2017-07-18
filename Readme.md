@@ -4,8 +4,8 @@ It is middleware for send metrics about API to Telegraf
 
 ## Message format
 
-    raw-api-requests-updates,request_name=GET-/api/v1/info,response_name=GET-/api/v1/info,error_code=0,status=2XX timing=3 1498226123268
-    raw-api-requests-updates,request_name=GET-/api/v1/info,response_name=GET-/api/v1/info,error_code=0,status=2XX timing=4 1498226123648
+    raw-api-requests-updates,request_name=GET-/api/v1/info,response_name=GET-/api/v1/info,error_code=200 timing=3 1498226123268
+    raw-api-requests-updates,request_name=GET-/api/v1/info,response_name=GET-/api/v1/info,error_code=200 timing=4 1498226123648
 
 ## Usage 
 
