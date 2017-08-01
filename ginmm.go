@@ -203,7 +203,7 @@ func (m *MetricSender) Send(data responseInfo) error {
 		//write request name
 		b.WriteString(data.method)
 		b.WriteRune('-')
-		b.WriteString(data.url.String())
+		b.WriteString(data.url.Path)
 	}
 
 	_, err = b.WriteString(RESPONSE_NAME)
