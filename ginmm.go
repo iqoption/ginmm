@@ -23,6 +23,10 @@ const (
 	RESPONSE_NAME          = ",response_name="
 	STATUS                 = ",error_code="
 	TIMING                 = " timing="
+	SLA                    = "sla-"
+	CUSTOM_SLA_METRIC      = ",metric=alive"
+	CUSTOM_SLA_VALUE       = " value=1.0 "
+	ALIVE_PERIOD           = time.Second * 10
 )
 
 type responseInfo struct {
@@ -130,6 +134,7 @@ func metricLoop(params MetricParams, dataChanel <-chan responseInfo, errc chan<-
 	}
 
 	tick := time.NewTicker(params.FlushTimeout)
+	alive := time.NewTicker(ALIVE_PERIOD)
 
 	for {
 		select {
@@ -151,6 +156,13 @@ func metricLoop(params MetricParams, dataChanel <-chan responseInfo, errc chan<-
 				errc <- err
 				return
 			}
+
+		case <-alive.C:
+			err = sender.Alive()
+			if err != nil {
+				errc <- err
+				return
+			}
 		}
 	}
 }
@@ -158,6 +170,7 @@ func metricLoop(params MetricParams, dataChanel <-chan responseInfo, errc chan<-
 type MetricSender struct {
 	conn   *net.UDPConn
 	buffer bytes.Buffer
+	tmpBuffer bytes.Buffer
 	params MetricParams
 }
 
@@ -179,8 +192,9 @@ func NewSender(params MetricParams) (*MetricSender, error) {
 }
 
 func (m *MetricSender) Send(data responseInfo) error {
+	defer m.tmpBuffer.Reset()
+	b := &m.tmpBuffer
 
-	var b bytes.Buffer
 	// "raw-api-requests-%s,request_name=%s,response_name=%s,error_code=%d timing=%.0f %d\n"
 	_, err := b.WriteString(RAW_API_REQUEST)
 	if err != nil {
@@ -292,4 +306,50 @@ func (m *MetricSender) close() {
 
 func makeTimestamp() int64 {
 	return time.Now().UnixNano()
+}
+
+func (m *MetricSender) Alive() error {
+	defer m.tmpBuffer.Reset()
+	b := &m.tmpBuffer
+
+	//sla-%s,metric=alive value=1.0 1481537925000000000
+	_, err := b.WriteString(SLA)
+	if err != nil {
+		log.Printf("Can't write in buffer: %s", err.Error())
+		return err
+	}
+
+	_, err = b.WriteString(m.params.Service)
+	if err != nil {
+		log.Printf("Can't write in buffer: %s", err.Error())
+		return err
+	}
+
+	_, err = b.WriteString(CUSTOM_SLA_METRIC)
+	if err != nil {
+		log.Printf("Can't write in buffer: %s", err.Error())
+		return err
+	}
+
+	_, err = b.WriteString(CUSTOM_SLA_VALUE)
+	if err != nil {
+		log.Printf("Can't write in buffer: %s", err.Error())
+		return err
+	}
+
+	_, err = b.WriteString(strconv.FormatInt(makeTimestamp(), 10))
+	if err != nil {
+		log.Printf("Can't write in buffer: %s", err.Error())
+		return err
+	}
+
+	_, err = b.WriteRune('\n')
+	if err != nil {
+		log.Printf("Can't write in buffer: %s", err.Error())
+		return err
+	}
+
+	m.buffer.Write(b.Bytes())
+	m.Flush()
+	return nil
 }
