@@ -1,16 +1,15 @@
 package ginmm
 
 import (
+	"bytes"
+	"github.com/gin-gonic/gin"
 	"log"
+	"math"
 	"net"
+	"net/url"
+	"strconv"
 	"sync"
 	"time"
-	"math"
-	"bytes"
-	"net/url"
-	"github.com/gin-gonic/gin"
-	"github.com/go-errors/errors"
-	"strconv"
 )
 
 const (
@@ -44,21 +43,12 @@ type MetricParams struct {
 }
 
 type MetricMiddleware struct {
-	metricChanel  chan responseInfo
-	errChanel     chan error
-	isError       bool
-	params        MetricParams
-	lastReConnect time.Time
+	metricChanel chan responseInfo
+	params       MetricParams
 }
 
 func (m *MetricMiddleware) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		m.check()
-
-		if m.isError {
-			c.Next()
-			return
-		}
 
 		t := time.Now()
 		c.Next()
@@ -76,63 +66,24 @@ func (m *MetricMiddleware) Middleware() gin.HandlerFunc {
 
 func NewMetricMiddleware(params MetricParams) *MetricMiddleware {
 	mch := make(chan responseInfo, RESPONSE_CHANEL_BUFFER)
-	errch := make(chan error)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go metricLoop(params, mch, errch, &wg)
+	go metricLoop(params, mch, &wg)
 	wg.Wait()
 
 	return &MetricMiddleware{
 		metricChanel: mch,
-		errChanel:    errch,
 		params:       params,
 	}
 }
 
-func (m *MetricMiddleware) check() {
-	if m.isError {
-		m.reConnect()
-		return
-	}
+func metricLoop(params MetricParams, dataChanel <-chan responseInfo, wg *sync.WaitGroup) {
 
-	select {
-	case err := <-m.errChanel:
-		log.Print(err)
-		m.isError = true
-
-		close(m.errChanel)
-		close(m.metricChanel)
-
-		m.lastReConnect = time.Now()
-	default:
-	}
-}
-
-func (m *MetricMiddleware) reConnect() {
-	if time.Since(m.lastReConnect) >= RECONNECT_TIME_OUT {
-		m.lastReConnect = time.Now()
-
-		log.Println("I am trying to connect...")
-		m.metricChanel = make(chan responseInfo, RESPONSE_CHANEL_BUFFER)
-		m.errChanel = make(chan error)
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go metricLoop(m.params, m.metricChanel, m.errChanel, &wg)
-		wg.Wait()
-		m.isError = false
-	}
-}
-
-func metricLoop(params MetricParams, dataChanel <-chan responseInfo, errc chan<- error, wg *sync.WaitGroup) {
-
-	sender, err := NewSender(params)
+	sender := NewSender(params)
 	wg.Done()
-	if err != nil {
-		errc <- err
-		return
-	}
 
+	sender.Connect()
 	tick := time.NewTicker(params.FlushTimeout)
 	alive := time.NewTicker(ALIVE_PERIOD)
 
@@ -140,55 +91,42 @@ func metricLoop(params MetricParams, dataChanel <-chan responseInfo, errc chan<-
 		select {
 		case data, ok := <-dataChanel:
 			if !ok {
-				err = sender.Quit()
+				//Chanel is closed. Exit from gorutine
 				return
 			}
 
-			err = sender.Send(data)
+			err := sender.Send(data)
 			if err != nil {
-				errc <- err
-				return
+				sender.Connect()
 			}
 
 		case <-tick.C:
-			err = sender.Flush()
+			err := sender.Flush()
 			if err != nil {
-				errc <- err
-				return
+				sender.Connect()
 			}
 
 		case <-alive.C:
-			err = sender.Alive()
+			err := sender.Alive()
 			if err != nil {
-				errc <- err
-				return
+				sender.Connect()
 			}
 		}
 	}
 }
 
 type MetricSender struct {
-	conn   *net.UDPConn
-	buffer bytes.Buffer
+	conn      *net.UDPConn
+	buffer    bytes.Buffer
 	tmpBuffer bytes.Buffer
-	params MetricParams
+	params    MetricParams
+	isError   bool
 }
 
-func NewSender(params MetricParams) (*MetricSender, error) {
-	dest, err := net.ResolveUDPAddr("udp", params.UdpAddres)
-	if err != nil {
-		return nil, errors.New(errors.Errorf("Warning: can't resolve address %s: %s", params.UdpAddres, err.Error()))
-	}
-
-	conn, err := net.DialUDP("udp", nil, dest)
-	if err != nil {
-		return nil, errors.New(errors.Errorf("Warning: can't create udp dial for %s: %s", params.UdpAddres, err.Error()))
-	}
-
+func NewSender(params MetricParams) *MetricSender {
 	return &MetricSender{
-		conn:   conn,
 		params: params,
-	}, nil
+	}
 }
 
 func (m *MetricSender) Send(data responseInfo) error {
@@ -351,5 +289,32 @@ func (m *MetricSender) Alive() error {
 
 	m.buffer.Write(b.Bytes())
 	m.Flush()
+	return nil
+}
+
+func (m *MetricSender) Connect() error {
+	log.Println("Connecting to telegraf")
+	if m.isError {
+		m.close()
+	}
+
+	m.isError = false
+	dest, err := net.ResolveUDPAddr("udp", m.params.UdpAddres)
+
+	if err != nil {
+		log.Printf("Warning: can't resolve address %s: %s", m.params.UdpAddres, err.Error())
+		m.isError = true
+		return err
+	}
+
+	conn, err := net.DialUDP("udp", nil, dest)
+	if err != nil {
+		log.Printf("Warning: can't create udp dial for %s: %s", m.params.UdpAddres, err.Error())
+		m.isError = true
+		return err
+	}
+	log.Println("Connected to telegraf")
+
+	m.conn = conn
 	return nil
 }
