@@ -64,6 +64,15 @@ func (m *MetricMiddleware) Middleware() gin.HandlerFunc {
 	}
 }
 
+func (m *MetricMiddleware) Push(method string, url *url.URL, status int64, duration time.Duration) {
+	m.metricChanel <- responseInfo{
+		status:   status,
+		duration: duration,
+		method:   method,
+		url:      url,
+	}
+}
+
 func NewMetricMiddleware(params MetricParams) *MetricMiddleware {
 	mch := make(chan responseInfo, RESPONSE_CHANEL_BUFFER)
 
